@@ -2,6 +2,10 @@
 # Copyright (c) 2020, Denny Page
 # All rights reserved.
 #
+# Modified 2026-10-23 by weewx-packages: Python 3 only, Python 2 and WeeWX 3
+#   fallbacks removed; the uploader does not start with the placeholder or an
+#   invalid server_url. See the changelog.
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
 # are met:
@@ -48,57 +52,18 @@ Configuration:
         Other standard restx options such as 'log_success' are also accepted
 """
 
-try:
-    # Python 3
-    import queue
-except ImportError:
-    # Python 2
-    import Queue as queue
-try:
-    # Python 3
-    from urllib.parse import urlencode
-except ImportError:
-    # Python 2
-    from urllib import urlencode
-
-import sys
-import time
 import json
+import logging
+import queue
 
 import weewx
+import weewx.manager
 import weewx.restx
+import weewx.units
 
-VERSION = "1.0"
+VERSION = "1.1"
 
-try:
-    import weeutil.logger
-    import logging
-    log = logging.getLogger(__name__)
-
-    def logdbg(msg):
-        log.debug(msg)
-
-    def loginf(msg):
-        log.info(msg)
-
-    def logerr(msg):
-        log.error(msg)
-
-except ImportError:
-    # Old-style logging
-    import syslog
-
-    def logmsg(level, msg):
-        syslog.syslog(level, 'Hubitat: %s' % msg)
-
-    def logdbg(msg):
-        logmsg(syslog.LOG_DEBUG, msg)
-
-    def loginf(msg):
-        logmsg(syslog.LOG_INFO, msg)
-
-    def logerr(msg):
-        logmsg(syslog.LOG_ERR, msg)
+log = logging.getLogger(__name__)
 
 
 class Hubitat(weewx.restx.StdRESTbase):
@@ -112,8 +77,8 @@ class Hubitat(weewx.restx.StdRESTbase):
 
             target_unit: Unit system to use for posting to Hubitat if different than StdConvert target_unit (default None)
         """
-        super(Hubitat, self).__init__(engine, config_dict)
-        loginf("version %s" % VERSION)
+        super().__init__(engine, config_dict)
+        log.info("version %s", VERSION)
 
         site_dict = weewx.restx.get_site_dict(config_dict, 'Hubitat', 'server_url')
         if site_dict is None:
@@ -124,17 +89,27 @@ class Hubitat(weewx.restx.StdRESTbase):
         except weewx.UnknownBinding:
             pass
 
+        # The installer writes the placeholder hubURL_from_hubitat_device. An
+        # uploader with a server_url that is not a URL raises on its first
+        # packet and the thread ends. The queue would then grow with every
+        # loop packet, so the thread is not started.
+        server_url = site_dict['server_url']
+        if not server_url.startswith(('http://', 'https://')):
+            log.error("server_url is '%s'. Set it to the hubURL of the Hubitat device, "
+                      "which starts with http://. Data will not be posted.", server_url)
+            return
+
         # If we've been given a conversion target, ensure that it is valid
         target_unit = site_dict.get('target_unit')
         if target_unit and target_unit.upper() not in weewx.units.unit_constants:
-            logerr("Invalid target_unit setting. See [StdConvert] for a list of available options")
+            log.error("Invalid target_unit setting. See [StdConvert] for a list of available options")
             return
-        
+
         self.loop_queue = queue.Queue()
         self.loop_thread = HubitatThread(self.loop_queue, **site_dict)
         self.loop_thread.start()
         self.bind(weewx.NEW_LOOP_PACKET, self.new_loop_packet)
-        loginf("Data will be posted to %s" % site_dict['server_url'])
+        log.info("Data will be posted to %s", server_url)
 
     def new_loop_packet(self, event):
         self.loop_queue.put(event.packet)
@@ -170,26 +145,38 @@ class HubitatThread(weewx.restx.RESTThread):
         'THSW': ('THSW', '%.1f'),
     }
 
-    def __init__(self, queue, manager_dict,
+    def __init__(self, q, manager_dict=None,
                  server_url=None,
                  target_unit=None,
                  skip_upload=False,
                  post_interval=60, max_backlog=0, stale=None,
                  log_success=False, log_failure=False,
                  timeout=10, max_tries=1, retry_wait=1):
+        """Initializer for the uploader thread.
 
-        super(HubitatThread, self).__init__(queue,
-                                             protocol_name='Hubitat',
-                                             manager_dict=manager_dict,
-                                             post_interval=post_interval,
-                                             max_backlog=max_backlog,
-                                             stale=stale,
-                                             log_success=log_success,
-                                             log_failure=log_failure,
-                                             max_tries=max_tries,
-                                             timeout=timeout,
-                                             retry_wait=retry_wait,
-                                             skip_upload=skip_upload)
+        Args:
+            q (queue.Queue): The queue that delivers the loop packets.
+            manager_dict (dict|None): Arguments for opening the database manager,
+                which supplies the rain totals missing from a loop packet. None
+                if the station has no wx_binding.
+            server_url (str): The hubURL of the Hubitat WeeWX device.
+            target_unit (str|None): Name of the unit system to post in, for
+                example 'METRIC'. None posts in the unit system of the packet.
+
+        The other arguments are those of weewx.restx.RESTThread.
+        """
+        super().__init__(q,
+                         protocol_name='Hubitat',
+                         manager_dict=manager_dict,
+                         post_interval=post_interval,
+                         max_backlog=max_backlog,
+                         stale=stale,
+                         log_success=log_success,
+                         log_failure=log_failure,
+                         max_tries=max_tries,
+                         timeout=timeout,
+                         retry_wait=retry_wait,
+                         skip_upload=skip_upload)
 
         self.server_url = server_url
         if target_unit:
@@ -199,7 +186,7 @@ class HubitatThread(weewx.restx.RESTThread):
 
     def format_url(self, _):
         """Return the URL for posting to the Hubitat"""
-        logdbg("url: %s" % self.server_url)
+        log.debug("url: %s", self.server_url)
         return self.server_url
 
     def get_post_body(self, in_record):
@@ -219,5 +206,5 @@ class HubitatThread(weewx.restx.RESTThread):
                 value = self._FORMATS[wkey][1] % record[wkey]
                 data[key] = value
 
-        logdbg("post_body: %s" % data)
+        log.debug("post_body: %s", data)
         return json.dumps(data), 'application/json'

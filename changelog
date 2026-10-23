@@ -1,0 +1,15 @@
+1.1 23oct2026
+* Python 3 only: removed the Python 2 imports and the WeeWX 3 syslog fallback.
+  WeeWX 4 or later is required.
+* do not start the service while server_url is not an http:// or https://
+  URL, which includes the placeholder hubURL_from_hubitat_device that the
+  installer writes. The first packet used to raise an error that ended the
+  thread, and the queue then grew with every loop packet.
+* start on a station without a wx_binding. HubitatThread now takes
+  manager_dict=None. Before, the missing binding led to a TypeError.
+* add LICENSE with the BSD 2-Clause text of the module header.
+* README follows the weewx-packages schema. Add smoke tests with a local
+  HTTP server.
+
+1.0 09jul2020
+* initial version by Denny Page

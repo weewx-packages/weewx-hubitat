@@ -1,4 +1,6 @@
 # Installer for the Hubitat device extension
+#
+# Modified 2026-10-23 by weewx-packages: version 1.1.
 
 from weecfg.extension import ExtensionInstaller
 
@@ -7,8 +9,8 @@ def loader():
 
 class HubitatInstaller(ExtensionInstaller):
     def __init__(self):
-        super(HubitatInstaller, self).__init__(
-            version="1.0",
+        super().__init__(
+            version="1.1",
             name='hubitat',
             description='Post loop data to a Hubitat device',
             restful_services='user.hubitat.Hubitat',
